@@ -14,7 +14,8 @@ use tokio::{fs, time::Instant};
 
 pub const RUN_FLAG: &str = "thyme-run";
 pub const SKIP_FLAG: &str = "thyme-skip";
-pub const KEY_PREFIX: &str = "thyme-key=";
+pub const ARGS_PREFIX: &str = "thyme-args=";
+pub const EXPECT_PREFIX: &str = "thyme-expect=";
 
 fn get_env_var_or_exit(name: &str) -> String {
     dotenv().ok();
@@ -41,7 +42,7 @@ struct Args {
     file: Option<PathBuf>,
 
     #[arg(long)]
-    thyme_args_file: Option<PathBuf>,
+    thyme_file: Option<PathBuf>,
 
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     require_run_flag: bool,
@@ -55,8 +56,8 @@ async fn main() {
         .database_url
         .unwrap_or_else(|| get_env_var_or_exit("THYME_DATABASE_URL"));
 
-    let thyme_args = match &arg.thyme_args_file {
-        Some(path) => load_thyme_args(path).await,
+    let thyme_config = match &arg.thyme_file {
+        Some(path) => load_thyme_config(path).await,
         None => Value::Null,
     };
 
@@ -83,7 +84,7 @@ async fn main() {
             std::process::exit(1);
         }
 
-        run_file(&pg_pool, &file, arg.require_run_flag, &thyme_args).await
+        run_file(&pg_pool, &file, arg.require_run_flag, &thyme_config).await
     } else {
         let dir = arg.dir.unwrap_or_else(|| env::current_dir().unwrap());
 
@@ -95,7 +96,7 @@ async fn main() {
             std::process::exit(1);
         }
 
-        traverse_dirs(pg_pool, &dir, arg.require_run_flag, &thyme_args).await
+        traverse_dirs(pg_pool, &dir, arg.require_run_flag, &thyme_config).await
     };
 
     if res_vec.is_empty() {
@@ -106,45 +107,47 @@ async fn main() {
     res_vec.sort_by_key(|i| Reverse(i.1));
 
     let mut table = Table::new();
-    table.set_header(vec!["Query", "Duration (sec)", "Duration (ms)"]);
+    table.set_header(vec!["Query", "Duration (sec)", "Duration (ms)", "Expected"]);
 
     for el in res_vec {
         table.add_row(vec![
             Cell::new(el.0).fg(comfy_table::Color::Blue),
             Cell::new((el.1 as f64) / 1000.0).fg(comfy_table::Color::Green),
             Cell::new(el.1).fg(comfy_table::Color::Green),
+            Cell::new(match el.2 {
+                Some(true) => "pass",
+                Some(false) => "fail",
+                None => "n/a",
+            }),
         ]);
     }
 
     println!("{table}");
 }
 
-async fn load_thyme_args(path: &Path) -> Value {
+async fn load_thyme_config(path: &Path) -> Value {
     if !path.is_file() {
-        println!(
-            "Provided thyme args file path is not a file: {}",
-            path.display()
-        );
+        println!("Provided thyme file path is not a file: {}", path.display());
         std::process::exit(1);
     }
 
     match fs::read_to_string(path).await {
         Ok(content) => match serde_json::from_str::<Value>(&content) {
-            Ok(json) => json.get("args").cloned().unwrap_or(Value::Null),
+            Ok(json) => json,
             Err(err) => {
-                println!("Failed to parse thyme args file: {err}");
+                println!("Failed to parse thyme file: {err}");
                 std::process::exit(1);
             }
         },
         Err(err) => {
-            println!("Failed to read thyme args file: {err}");
+            println!("Failed to read thyme file: {err}");
             std::process::exit(1);
         }
     }
 }
 
-fn extract_thyme_key(query: &str) -> Option<String> {
-    let start = query.find(KEY_PREFIX)? + KEY_PREFIX.len();
+fn extract_quoted_value(query: &str, prefix: &str) -> Option<String> {
+    let start = query.find(prefix)? + prefix.len();
     let rest = query[start..].trim_start();
 
     let rest = rest.strip_prefix('"')?;
@@ -165,15 +168,7 @@ fn json_value_to_sql_literal(value: &Value) -> String {
     }
 }
 
-fn query_params_from_thyme_key(query: &str, thyme_args: &Value) -> Result<QueryParams, String> {
-    let Some(key) = extract_thyme_key(query) else {
-        return Ok(QueryParams::None);
-    };
-
-    let Some(value) = thyme_args.get(&key) else {
-        return Err(format!("No value found for args.{key}"));
-    };
-
+fn query_params_from_value(value: &Value, label: &str) -> Result<QueryParams, String> {
     match value {
         Value::Object(map) => Ok(QueryParams::Named(
             map.iter()
@@ -184,13 +179,25 @@ fn query_params_from_thyme_key(query: &str, thyme_args: &Value) -> Result<QueryP
             values.iter().map(json_value_to_sql_literal).collect(),
         )),
         _ => Err(format!(
-            "args.{key} must be an object for named args or an array for positional args"
+            "{label} must be an object for named args or an array for positional args"
         )),
     }
 }
 
-fn format_query_with_thyme_args(query: &str, thyme_args: &Value) -> Result<String, String> {
-    let params = query_params_from_thyme_key(query, thyme_args)?;
+fn query_params_from_config(query: &str, config: &Value) -> Result<QueryParams, String> {
+    let Some(key) = extract_quoted_value(query, ARGS_PREFIX) else {
+        return Ok(QueryParams::None);
+    };
+
+    let Some(value) = config.get("args").and_then(|args| args.get(&key)) else {
+        return Err(format!("No value found for args.{key}"));
+    };
+
+    query_params_from_value(value, &format!("args.{key}"))
+}
+
+fn format_query_with_args(query: &str, config: &Value) -> Result<String, String> {
+    let params = query_params_from_config(query, config)?;
 
     let options = FormatOptions {
         dialect: Dialect::PostgreSql,
@@ -200,14 +207,57 @@ fn format_query_with_thyme_args(query: &str, thyme_args: &Value) -> Result<Strin
     Ok(format(query, &params, &options))
 }
 
+fn expected_rows_from_config(query: &str, config: &Value) -> Result<Option<Value>, String> {
+    let Some(key) = extract_quoted_value(query, EXPECT_PREFIX) else {
+        return Ok(None);
+    };
+
+    let Some(value) = config.get("expect").and_then(|expect| expect.get(&key)) else {
+        return Err(format!("No value found for expect.{key}"));
+    };
+
+    match value {
+        Value::Object(_) => Ok(Some(Value::Array(vec![value.clone()]))),
+        Value::Array(values) => {
+            for value in values {
+                if !value.is_object() {
+                    return Err(format!(
+                        "expect.{key} must be an object or an array of objects"
+                    ));
+                }
+            }
+
+            Ok(Some(value.clone()))
+        }
+        _ => Err(format!(
+            "expect.{key} must be an object or an array of objects"
+        )),
+    }
+}
+
+fn wrap_query_as_json(query: &str) -> String {
+    format!(
+        "select coalesce(jsonb_agg(to_jsonb(thyme_result)), '[]'::jsonb)::text from ({query}) as thyme_result"
+    )
+}
+
+async fn query_output_as_json(pg_pool: &PgPool, query: &str) -> Result<Value, String> {
+    let output = sqlx::query_scalar::<_, String>(&wrap_query_as_json(query))
+        .fetch_one(pg_pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    serde_json::from_str::<Value>(&output).map_err(|err| err.to_string())
+}
+
 async fn traverse_dirs(
     pg_pool: PgPool,
     dir: &Path,
     require_run_flag: bool,
-    thyme_args: &Value,
-) -> Vec<(String, u128)> {
+    thyme_config: &Value,
+) -> Vec<(String, u128, Option<bool>)> {
     let mut stack = vec![dir.to_path_buf()];
-    let mut res_vec: Vec<(String, u128)> = vec![];
+    let mut res_vec: Vec<(String, u128, Option<bool>)> = vec![];
 
     while let Some(current_dir) = stack.pop() {
         let mut entries = fs::read_dir(&current_dir).await.unwrap();
@@ -220,7 +270,7 @@ async fn traverse_dirs(
                 stack.push(path);
             } else if file_type.is_file() {
                 let mut file_results =
-                    run_file(&pg_pool, &path, require_run_flag, thyme_args).await;
+                    run_file(&pg_pool, &path, require_run_flag, thyme_config).await;
                 res_vec.append(&mut file_results);
             }
         }
@@ -233,8 +283,8 @@ async fn run_file(
     pg_pool: &PgPool,
     path: &Path,
     require_run_flag: bool,
-    thyme_args: &Value,
-) -> Vec<(String, u128)> {
+    thyme_config: &Value,
+) -> Vec<(String, u128, Option<bool>)> {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -257,17 +307,26 @@ async fn run_file(
             continue;
         }
 
-        let formatted_query = match format_query_with_thyme_args(query, thyme_args) {
+        let actual_query = match format_query_with_args(query, thyme_config) {
             Ok(query) => query,
             Err(err) => {
                 println!("Skipping {} ({}): {err}", path.display(), idx + 1);
                 continue;
             }
         };
-        println!("{formatted_query}");
+
+        let expected_rows = match expected_rows_from_config(query, thyme_config) {
+            Ok(value) => value,
+            Err(err) => {
+                println!("Skipping {} ({}): {err}", path.display(), idx + 1);
+                continue;
+            }
+        };
 
         let query_name = format!("{} ({})", path.display(), idx + 1);
-        res_vec.push(execute_queries_in_file(pg_pool, query_name, &formatted_query).await);
+
+        res_vec
+            .push(execute_queries_in_file(pg_pool, query_name, &actual_query, expected_rows).await);
     }
 
     res_vec
@@ -276,19 +335,41 @@ async fn run_file(
 async fn execute_queries_in_file(
     pg_pool: &PgPool,
     file_name: String,
-    file_content: &str,
-) -> (String, u128) {
+    actual_query: &str,
+    expected_rows: Option<Value>,
+) -> (String, u128, Option<bool>) {
     let query_start_time = Instant::now();
 
-    match sqlx::query(file_content).fetch_all(pg_pool).await {
-        Ok(_) => {
+    let result = match expected_rows {
+        Some(expected_rows) => match query_output_as_json(pg_pool, actual_query).await {
+            Ok(actual_rows) => {
+                if actual_rows == expected_rows {
+                    Ok(Some(true))
+                } else {
+                    println!("Expectation failed for {file_name}");
+                    println!("Actual: {actual_rows}");
+                    println!("Expected: {expected_rows}");
+                    Ok(Some(false))
+                }
+            }
+            Err(err) => Err(err),
+        },
+        None => sqlx::query(actual_query)
+            .fetch_all(pg_pool)
+            .await
+            .map(|_| None)
+            .map_err(|err| err.to_string()),
+    };
+
+    match result {
+        Ok(expectation_result) => {
             let elapsed_time = query_start_time.elapsed();
             let query_execution_time_ms = elapsed_time.as_millis();
-            (file_name, query_execution_time_ms)
+            (file_name, query_execution_time_ms, expectation_result)
         }
         Err(err) => {
             println!("Query failed for {file_name}: {err}");
-            (file_name, 0)
+            (file_name, 0, Some(false))
         }
     }
 }
