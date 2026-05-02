@@ -111,15 +111,17 @@ async fn main() {
     table.set_header(vec!["Query", "Duration (sec)", "Duration (ms)", "Expected"]);
 
     for el in res_vec {
+        let expected_cell = match el.2 {
+            Some(true) => Cell::new("✅ pass").fg(comfy_table::Color::Green),
+            Some(false) => Cell::new("❌ fail").fg(comfy_table::Color::Red),
+            None => Cell::new("n/a"),
+        };
+
         table.add_row(vec![
             Cell::new(el.0).fg(comfy_table::Color::Blue),
             Cell::new((el.1 as f64) / 1000.0).fg(comfy_table::Color::Green),
             Cell::new(el.1).fg(comfy_table::Color::Green),
-            Cell::new(match el.2 {
-                Some(true) => "pass",
-                Some(false) => "fail",
-                None => "n/a",
-            }),
+            expected_cell,
         ]);
     }
 
