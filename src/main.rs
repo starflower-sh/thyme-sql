@@ -1,4 +1,5 @@
 use clap::{ArgAction, Parser};
+use poppy_sql::find_sql_in_python_file;
 use std::{
     cmp::Reverse,
     env,
@@ -294,12 +295,19 @@ async fn run_file(
         .unwrap_or("")
         .to_string();
 
-    if !filename.ends_with(".sql") {
+    if !filename.ends_with(".sql") && !filename.ends_with(".py") {
         return vec![];
     }
 
-    let queries: String = fs::read_to_string(path).await.unwrap();
-    let queries: Vec<&str> = queries.split(';').collect();
+    let mut queries: Vec<String> = vec![];
+    let content: String = fs::read_to_string(path).await.unwrap();
+
+    if filename.ends_with(".sql") {
+        queries = content.split(';').map(|s| s.to_string()).collect();
+    } else if filename.ends_with(".py") {
+        queries = find_sql_in_python_file(content.as_str(), false).queries;
+    }
+
     let mut res_vec = vec![];
 
     for (idx, query) in queries.iter().enumerate() {
@@ -310,13 +318,17 @@ async fn run_file(
             continue;
         }
 
-        let actual_query = match format_query_with_args(query, thyme_config) {
+        let mut actual_query = match format_query_with_args(query, thyme_config) {
             Ok(query) => query,
             Err(err) => {
                 println!("Skipping {} ({}): {err}", path.display(), idx + 1);
                 continue;
             }
         };
+        // TODO: Figure out why it doesn't play ball with ending semicolons
+        if actual_query.ends_with(';') {
+            actual_query.pop();
+        }
 
         let expected_rows = match expected_rows_from_config(query, thyme_config) {
             Ok(value) => value,
