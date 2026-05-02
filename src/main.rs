@@ -14,6 +14,7 @@ use tokio::{fs, time::Instant};
 
 pub const RUN_FLAG: &str = "thyme-run";
 pub const SKIP_FLAG: &str = "thyme-skip";
+pub const NAME_PREFIX: &str = "thyme-name=";
 pub const ARGS_PREFIX: &str = "thyme-args=";
 pub const EXPECT_PREFIX: &str = "thyme-expect=";
 
@@ -323,7 +324,8 @@ async fn run_file(
             }
         };
 
-        let query_name = format!("{} ({})", path.display(), idx + 1);
+        let query_name = extract_quoted_value(query, NAME_PREFIX)
+            .unwrap_or_else(|| format!("{} ({})", path.display(), idx + 1));
 
         res_vec
             .push(execute_queries_in_file(pg_pool, query_name, &actual_query, expected_rows).await);
