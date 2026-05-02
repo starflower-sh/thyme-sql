@@ -1,4 +1,4 @@
-Thyme is a performance benchmark tool for Postgres.
+Thyme is a query runner and performance benchmark tool for Postgres.
 
 ## Installation
 Thyme is available to install through cargo using:
