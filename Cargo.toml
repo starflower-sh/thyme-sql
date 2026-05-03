@@ -1,9 +1,9 @@
 [package]
 name = "thyme-sql"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Charlie Eeles <charlie.eeles@gmail.com>"]
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 description = "Performance benchmark tool for Postgres queries"
 repository = "https://github.com/Charlie-Eeles/thyme-sql"
 
