@@ -1,6 +1,6 @@
 [package]
 name = "thyme-sql"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Charlie Eeles <charlie.eeles@gmail.com>"]
 edition = "2024"
 license = "MIT"

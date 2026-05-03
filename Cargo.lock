@@ -955,9 +955,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "poppy-sql"
-version = "0.1.7"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c35bccfa087704906af455c2dab6ac8044b16cc4be77f747ae5fcf52e8e0e36b"
+checksum = "4ec5e236e5bc776c3d6b675742563a9a9d3e8c0733af0869c6efef1156100347"
 dependencies = [
  "clap",
  "sqlformat",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "thyme-sql"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "comfy-table",
