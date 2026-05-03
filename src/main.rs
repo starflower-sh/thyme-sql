@@ -15,9 +15,15 @@ use tokio::{fs, time::Instant};
 
 pub const RUN_FLAG: &str = "thyme-run";
 pub const SKIP_FLAG: &str = "thyme-skip";
-pub const NAME_PREFIX: &str = "thyme-name=";
-pub const ARGS_PREFIX: &str = "thyme-args=";
-pub const EXPECT_PREFIX: &str = "thyme-expect=";
+pub const KEY_PREFIX: &str = "thyme-key=";
+
+#[derive(Clone)]
+struct QueryConfig {
+    key: String,
+    name: Option<String>,
+    args_key: Option<String>,
+    expect_key: Option<String>,
+}
 
 fn get_env_var_or_exit(name: &str) -> String {
     dotenv().ok();
@@ -188,54 +194,151 @@ fn query_params_from_value(value: &Value, label: &str) -> Result<QueryParams, St
     }
 }
 
-fn query_params_from_config(query: &str, config: &Value) -> Result<QueryParams, String> {
-    let Some(key) = extract_quoted_value(query, ARGS_PREFIX) else {
+fn get_config_string_value(
+    config: &Value,
+    field: &str,
+    label: &str,
+) -> Result<Option<String>, String> {
+    let Some(value) = config.get(field) else {
+        return Ok(None);
+    };
+
+    match value {
+        Value::String(value) => Ok(Some(value.clone())),
+        _ => Err(format!("{label}.{field} must be a string")),
+    }
+}
+
+fn query_config_from_key(query: &str, thyme_config: &Value) -> Result<Option<QueryConfig>, String> {
+    let Some(key) = extract_quoted_value(query, KEY_PREFIX) else {
+        return Ok(None);
+    };
+
+    let Some(config) = thyme_config
+        .get("queries")
+        .and_then(|config| config.get(&key))
+    else {
+        return Err(format!("No value found for queries.{key}"));
+    };
+
+    Ok(Some(QueryConfig {
+        name: get_config_string_value(config, "name", &format!("config.{key}"))?,
+        args_key: get_config_string_value(config, "args", &format!("config.{key}"))?,
+        expect_key: get_config_string_value(config, "expect", &format!("config.{key}"))?,
+        key,
+    }))
+}
+
+fn remove_thyme_directives(query: &str) -> String {
+    query
+        .lines()
+        .filter_map(|line| {
+            let Some(comment_start) = line.find("--") else {
+                return Some(line.to_string());
+            };
+
+            let before_comment = &line[..comment_start];
+            let comment = &line[comment_start..];
+
+            if comment.contains(RUN_FLAG)
+                || comment.contains(SKIP_FLAG)
+                || comment.contains(KEY_PREFIX)
+            {
+                let trimmed = before_comment.trim_end();
+
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn query_params_from_config(
+    query_config: Option<&QueryConfig>,
+    thyme_config: &Value,
+) -> Result<QueryParams, String> {
+    let Some(query_config) = query_config else {
         return Ok(QueryParams::None);
     };
 
-    let Some(value) = config.get("args").and_then(|args| args.get(&key)) else {
-        return Err(format!("No value found for args.{key}"));
+    let Some(args_key) = &query_config.args_key else {
+        return Ok(QueryParams::None);
     };
 
-    query_params_from_value(value, &format!("args.{key}"))
+    let Some(args) = thyme_config.get("args").and_then(|args| args.get(args_key)) else {
+        return Err(format!("No value found for args.{args_key}"));
+    };
+
+    query_params_from_value(args, &format!("args.{args_key}"))
 }
 
-fn format_query_with_args(query: &str, config: &Value) -> Result<String, String> {
-    let params = query_params_from_config(query, config)?;
+fn format_query_with_args(
+    query: &str,
+    query_config: Option<&QueryConfig>,
+    thyme_config: &Value,
+) -> Result<String, String> {
+    let params = query_params_from_config(query_config, thyme_config)?;
+    let query = remove_thyme_directives(query);
 
     let options = FormatOptions {
         dialect: Dialect::PostgreSql,
         ..FormatOptions::default()
     };
 
-    Ok(format(query, &params, &options))
+    Ok(format(&query, &params, &options))
 }
 
-fn expected_rows_from_config(query: &str, config: &Value) -> Result<Option<Value>, String> {
-    let Some(key) = extract_quoted_value(query, EXPECT_PREFIX) else {
-        return Ok(None);
-    };
-
-    let Some(value) = config.get("expect").and_then(|expect| expect.get(&key)) else {
-        return Err(format!("No value found for expect.{key}"));
-    };
-
+fn normalise_expected_rows(value: &Value, label: &str) -> Result<Option<Value>, String> {
     match value {
         Value::Object(_) => Ok(Some(Value::Array(vec![value.clone()]))),
         Value::Array(values) => {
             for value in values {
                 if !value.is_object() {
-                    return Err(format!(
-                        "expect.{key} must be an object or an array of objects"
-                    ));
+                    return Err(format!("{label} must be an object or an array of objects"));
                 }
             }
 
             Ok(Some(value.clone()))
         }
-        _ => Err(format!(
-            "expect.{key} must be an object or an array of objects"
-        )),
+        _ => Err(format!("{label} must be an object or an array of objects")),
+    }
+}
+
+fn expected_rows_from_config(
+    query_config: Option<&QueryConfig>,
+    thyme_config: &Value,
+) -> Result<Option<Value>, String> {
+    let Some(query_config) = query_config else {
+        return Ok(None);
+    };
+
+    let Some(expect_key) = &query_config.expect_key else {
+        return Ok(None);
+    };
+
+    let Some(value) = thyme_config
+        .get("expect")
+        .and_then(|expect| expect.get(expect_key))
+    else {
+        return Err(format!("No value found for expect.{expect_key}"));
+    };
+
+    normalise_expected_rows(value, &format!("expect.{expect_key}"))
+}
+
+fn query_name_from_config(path: &Path, idx: usize, query_config: Option<&QueryConfig>) -> String {
+    match query_config {
+        Some(query_config) => query_config
+            .name
+            .clone()
+            .unwrap_or_else(|| query_config.key.clone()),
+        None => format!("{} ({})", path.display(), idx + 1),
     }
 }
 
@@ -318,19 +421,7 @@ async fn run_file(
             continue;
         }
 
-        let mut actual_query = match format_query_with_args(query, thyme_config) {
-            Ok(query) => query,
-            Err(err) => {
-                println!("Skipping {} ({}): {err}", path.display(), idx + 1);
-                continue;
-            }
-        };
-        // TODO: Figure out why it doesn't play ball with ending semicolons
-        if actual_query.ends_with(';') {
-            actual_query.pop();
-        }
-
-        let expected_rows = match expected_rows_from_config(query, thyme_config) {
+        let query_config = match query_config_from_key(query, thyme_config) {
             Ok(value) => value,
             Err(err) => {
                 println!("Skipping {} ({}): {err}", path.display(), idx + 1);
@@ -338,8 +429,29 @@ async fn run_file(
             }
         };
 
-        let query_name = extract_quoted_value(query, NAME_PREFIX)
-            .unwrap_or_else(|| format!("{} ({})", path.display(), idx + 1));
+        let mut actual_query =
+            match format_query_with_args(query, query_config.as_ref(), thyme_config) {
+                Ok(query) => query,
+                Err(err) => {
+                    println!("Skipping {} ({}): {err}", path.display(), idx + 1);
+                    continue;
+                }
+            };
+
+        // TODO: Figure out why it doesn't play ball with ending semicolons
+        if actual_query.ends_with(';') {
+            actual_query.pop();
+        }
+
+        let expected_rows = match expected_rows_from_config(query_config.as_ref(), thyme_config) {
+            Ok(value) => value,
+            Err(err) => {
+                println!("Skipping {} ({}): {err}", path.display(), idx + 1);
+                continue;
+            }
+        };
+
+        let query_name = query_name_from_config(path, idx, query_config.as_ref());
 
         res_vec
             .push(execute_queries_in_file(pg_pool, query_name, &actual_query, expected_rows).await);
