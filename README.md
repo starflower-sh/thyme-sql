@@ -1,3 +1,5 @@
+[![Crates.io](https://img.shields.io/crates/v/thyme-sql.svg)](https://crates.io/crates/thyme-sql)
+
 Thyme is a query runner and performance benchmark tool for Postgres.
 
 ## Installation
