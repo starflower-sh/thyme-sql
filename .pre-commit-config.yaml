@@ -57,6 +57,6 @@ repos:
         args: ["--manifest-path", "Cargo.toml", "--allow-dirty", "--allow-staged"]
 
   - repo: https://github.com/starflower-sh/poppy-sql
-    rev: v0.2.5
+    rev: v0.2.6
     hooks:
       - id: poppy-sql

@@ -955,9 +955,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "poppy-sql"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4217f858eb893fff4e6420253ce2060b7401c27c1029d2424688fff3fb775293"
+checksum = "41bc8a1701799f4e1973d56016239d2217e479af6ebf12501a872ce950d9e748"
 dependencies = [
  "clap",
  "serde",
