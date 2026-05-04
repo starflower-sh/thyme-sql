@@ -1,5 +1,5 @@
 use clap::{ArgAction, Parser};
-use poppy_sql::find_sql_in_python_file;
+use poppy_sql::{Config, find_sql_in_python_file};
 use std::{
     cmp::Reverse,
     env,
@@ -408,7 +408,11 @@ async fn run_file(
     if filename.ends_with(".sql") {
         queries = content.split(';').map(|s| s.to_string()).collect();
     } else if filename.ends_with(".py") {
-        queries = find_sql_in_python_file(content.as_str(), false).queries;
+        let config = Config {
+            dialect: String::from("PostgreSql"),
+            ..Config::default()
+        };
+        queries = find_sql_in_python_file(content.as_str(), false, &config).queries;
     }
 
     let mut res_vec = vec![];

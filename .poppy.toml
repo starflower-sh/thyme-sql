@@ -1,0 +1,7 @@
+dialect = "PostgreSQL"
+
+[format]
+indent = 4
+uppercase = false
+joins_as_top_level = true
+lines_between_queries = 2
