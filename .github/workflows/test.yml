@@ -18,10 +18,38 @@ jobs:
       - name: Rustfmt Check
         uses: actions-rust-lang/rustfmt@v1
 
-  run_thyme:
-    name: Test Thyme functionality
+  test:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
+
+    env:
+      POSTGRES_USER: local
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: thyme-test
+      POSTGRES_PORT: 5432
+      POSTGRES_HOST: localhost
+
     steps:
+      - name: Start postgres
+        shell: bash
+        run: docker run -d -p 5432:5432 -v "pgdata:/var/lib/postgresql" -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -e POSTGRES_DB=$POSTGRES_DB -e POSTGRES_USER=$POSTGRES_USER "ghcr.io/starflower-sh/sage-postgres:18"
+
+      - name: Wait for postgres to be ready
+        shell: bash
+        run: |
+          started="$(date +'%s')"
+          until pg_isready -h localhost; do
+            if [ "$(date +'%s')" -gt "$((started + 60))" ]; then
+              echo "It's been a minute, timing out"; exit 1
+            fi
+
+            echo Waiting; sleep 1
+          done
+          echo Ready
+
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo run -- --thyme-file ./tests/thyme.json -t
+
+      - name: Test Thyme functionality
+        run: cargo run -- --thyme-file ./tests/thyme.json -t -u postgresql://local:password@localhost:5432/thyme-test?sslmode=disable
