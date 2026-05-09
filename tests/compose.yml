@@ -1,0 +1,18 @@
+name: thyme
+
+services:
+  postgres:
+    image: ghcr.io/starflower-sh/sage-postgres:18
+    container_name: postgres
+    environment:
+      POSTGRES_USER: local
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: thyme
+    ports:
+      - "5432:5432"
+    volumes:
+      - thyme_pg_data:/var/lib/pg-thyme/data
+    restart: unless-stopped
+
+volumes:
+  thyme_pg_data:

@@ -1,0 +1,20 @@
+{
+  "queries": {
+    "queries.select_default": {
+      "args": "default",
+      "expect": "select_is_default"
+    }
+  },
+  "args": {
+    "default": {
+      "id": 1,
+      "name": "thyme-sql"
+    }
+  },
+  "expect": {
+    "select_is_default": {
+      "id": 1,
+      "name": "thyme-sql"
+    }
+  }
+}
