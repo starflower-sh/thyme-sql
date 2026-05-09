@@ -49,6 +49,10 @@ struct Args {
     #[arg(short = 'f', long, conflicts_with = "dir")]
     file: Option<PathBuf>,
 
+    // Run in test mode: "fails" in any of the Expected column will result in an exit code 1
+    #[arg(short = 't', long, default_value_t = false)]
+    test_mode: bool,
+
     #[arg(long)]
     thyme_file: Option<PathBuf>,
 
@@ -117,10 +121,15 @@ async fn main() {
     let mut table = Table::new();
     table.set_header(vec!["Query", "Duration (sec)", "Duration (ms)", "Expected"]);
 
+    let mut num_of_failed_queries = 0;
+
     for el in res_vec {
         let expected_cell = match el.2 {
             Some(true) => Cell::new("✅ pass").fg(comfy_table::Color::Green),
-            Some(false) => Cell::new("❌ fail").fg(comfy_table::Color::Red),
+            Some(false) => {
+                num_of_failed_queries += 1;
+                Cell::new("❌ fail").fg(comfy_table::Color::Red)
+            }
             None => Cell::new("n/a"),
         };
 
@@ -133,6 +142,15 @@ async fn main() {
     }
 
     println!("{table}");
+
+    if arg.test_mode && num_of_failed_queries > 0 {
+        if num_of_failed_queries == 1 {
+            println!("1 query failed.");
+        } else {
+            println!("{num_of_failed_queries} queries failed.");
+        }
+        std::process::exit(1);
+    }
 }
 
 async fn load_thyme_config(path: &Path) -> Value {
